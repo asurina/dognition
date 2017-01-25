@@ -1,0 +1,164 @@
+/*Load SQL and database and make it defaul */
+%load_ext sql
+%sql mysql://studentuser:studentpw@mysqlserver/dognitiondb
+%sql USE dognitiondb
+
+/*Look at instances where the user's test completion time took
+longer than average*/
+%%sql
+SELECT *
+FROM exam_answers
+WHERE TIMESTAMPDIFF(minute,start_time, end_time) > 
+        (SELECT AVG(TIMESTAMPDIFF(minute,start_time,end_time)) AS AvgDuration
+        FROM exam_answers
+        WHERE TIMESTAMPDIFF(minute,start_time,end_time)>0 AND test_name="Yawn Warm-Up");
+        
+/*Determine which week days users complete tests for promotions*/
+%%sql
+SELECT c.created_at AS TimeStamp, COUNT(c.created_at) AS NumCompleted, 
+(CASE
+    WHEN DAYOFWEEK(c.created_at)=1 THEN "Sun"
+    WHEN DAYOFWEEK(c.created_at)=2 THEN "Mon"
+    WHEN DAYOFWEEK(c.created_at)=3 THEN "Tue"
+    WHEN DAYOFWEEK(c.created_at)=4 THEN "Wed"
+    WHEN DAYOFWEEK(c.created_at)=5 THEN "Thu"
+    WHEN DAYOFWEEK(c.created_at)=6 THEN "Fri"
+    WHEN DAYOFWEEK(c.created_at)=7 THEN "Sat"
+END) AS DayofWeek
+FROM complete_tests c JOIN 
+    (SELECT DISTINCT dog_guid
+    FROM dogs d JOIN users u
+        ON d.user_guid=u.user_guid
+    WHERE (u.exclude IS NULL OR u.exclude=0) 
+        AND (d.exclude IS NULL OR d.exclude=0)) AS CleanDogs
+    ON c.dog_guid=CleanDogs.dog_guid
+GROUP BY DayofWeek
+ORDER BY NumCompleted DESC;
+/*This shows the pattern that Sunday is the day most tests are 
+completed while Friday is the day least tests are completed.
+
+TimeStamp	NumCompleted	DayofWeek
+2013-02-10 01:14:03	31036	Sun
+2013-02-11 01:16:22	28138	Mon
+2013-02-09 15:53:49	26149	Sat
+2013-03-05 02:00:07	25696	Tue
+2013-02-13 18:21:43	24433	Wed
+2014-08-28 01:45:02	22323	Thu
+2013-04-12 01:23:41	21027	Fri
+*/
+
+/*Compare results across years to confirm pattern*/
+%%sql
+SELECT YEAR(c.created_at) AS YearCompleted, COUNT(c.created_at) AS NumCompleted, 
+(CASE
+    WHEN DAYOFWEEK(c.created_at)=1 THEN "Sun"
+    WHEN DAYOFWEEK(c.created_at)=2 THEN "Mon"
+    WHEN DAYOFWEEK(c.created_at)=3 THEN "Tue"
+    WHEN DAYOFWEEK(c.created_at)=4 THEN "Wed"
+    WHEN DAYOFWEEK(c.created_at)=5 THEN "Thu"
+    WHEN DAYOFWEEK(c.created_at)=6 THEN "Fri"
+    WHEN DAYOFWEEK(c.created_at)=7 THEN "Sat"
+END) AS DayofWeek
+FROM complete_tests c JOIN 
+    (SELECT DISTINCT dog_guid
+    FROM dogs d JOIN users u
+        ON d.user_guid=u.user_guid
+    WHERE (u.exclude IS NULL OR u.exclude=0) 
+        AND (d.exclude IS NULL OR d.exclude=0)) AS CleanDogs
+    ON c.dog_guid=CleanDogs.dog_guid
+GROUP BY YearCompleted, DayofWeek
+ORDER BY YearCompleted ASC, NumCompleted DESC;
+
+/* Output indicates small differences by year.
+2013 had Thursday as least busy day, but Thu and Fri are close
+2014 had Monday and Sunday neck-and-neck with Monday ahead
+2015 has Sunday and Monday tight with Sunday ahead, and Fri last
+
+YearCompleted	NumCompleted	DayofWeek
+2013	8203	Sun
+2013	6854	Sat
+2013	5740	Mon
+2013	5665	Wed
+2013	5393	Tue
+2013	4997	Fri
+2013	4961	Thu
+2014	9309	Mon
+2014	9210	Sun
+2014	9177	Tue
+2014	8857	Wed
+2014	8257	Sat
+2014	7286	Thu
+2014	6475	Fri
+2015	13623	Sun
+2015	13089	Mon
+2015	11126	Tue
+2015	11038	Sat
+2015	10076	Thu
+2015	9911	Wed
+2015	9555	Fri
+*/
+
+/* Test whether the time zone differences in global user data
+distort this pattern but selecting data for the Continental US only
+without Hawaii "HI" and Alaska "AK", converting UTC to US 6 hours back
+*/
+
+%%sql
+SELECT YEAR(c.created_at) AS YearCompleted, 
+COUNT(c.created_at) AS NumCompleted, 
+(CASE
+    WHEN DAYOFWEEK(DATE_SUB(c.created_at,interval 6 hour))=1 THEN "Sun"
+    WHEN DAYOFWEEK(DATE_SUB(c.created_at,interval 6 hour))=2 THEN "Mon"
+    WHEN DAYOFWEEK(DATE_SUB(c.created_at,interval 6 hour))=3 THEN "Tue"
+    WHEN DAYOFWEEK(DATE_SUB(c.created_at,interval 6 hour))=4 THEN "Wed"
+    WHEN DAYOFWEEK(DATE_SUB(c.created_at,interval 6 hour))=5 THEN "Thu"
+    WHEN DAYOFWEEK(DATE_SUB(c.created_at,interval 6 hour))=6 THEN "Fri"
+    WHEN DAYOFWEEK(DATE_SUB(c.created_at,interval 6 hour))=7 THEN "Sat"
+END) AS DayofWeek
+FROM complete_tests c JOIN 
+    (SELECT DISTINCT dog_guid
+    FROM dogs d JOIN users u
+        ON d.user_guid=u.user_guid
+    WHERE (u.exclude IS NULL OR u.exclude=0) 
+        AND (u.country="US")
+        AND (u.state!="HI" AND u.state!="AK")
+        AND (d.exclude IS NULL OR d.exclude=0)) AS CleanDogs
+    ON c.dog_guid=CleanDogs.dog_guid
+GROUP BY YearCompleted, DayofWeek
+ORDER BY YearCompleted ASC, NumCompleted DESC;
+
+/* The order stays the same, so users are completing 
+tests on Sunday and Monday, but not at the end of the work week*/
+
+/*Determine which 10 states in the US have the most users*/
+%%sql
+SELECT CleanDogs.state AS state, COUNT(DISTINCT CleanDogs.user_guid) AS NumUsers
+FROM complete_tests c JOIN 
+    (SELECT DISTINCT d.dog_guid, u.user_guid, u.state
+    FROM dogs d JOIN users u
+        ON d.user_guid=u.user_guid
+    WHERE ((u.exclude IS NULL OR u.exclude=0) 
+        AND (u.country="US")
+        AND (d.exclude IS NULL OR d.exclude=0))) AS CleanDogs
+    ON c.dog_guid=CleanDogs.dog_guid
+GROUP BY state
+ORDER BY NumUsers DESC
+LIMIT 10;
+
+/* The state with the most users is California, 
+so it would be helpful to gain insight from the team 
+to better understand why
+
+state	NumUsers
+CA	1363
+NY	628
+TX	536
+FL	502
+NC	467
+VA	365
+IL	327
+PA	321
+WA	294
+MA	282
+
+*/
